@@ -115,7 +115,7 @@ EMAIL_MODE=test
 ```env
 RESEND_API_KEY=re_LIVE_API_KEY
 EMAIL_FROM=noreply@smjmun.com
-EMAIL_REPLY_TO=contact@smjmun.com
+EMAIL_REPLY_TO=info@smjmun.com
 EMAIL_MODE=production
 ```
 4. Redeploy or restart your NextJS server.

@@ -8,9 +8,9 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 const founderImages = [
   '/images/founder-updated-1.webp',
    '/images/founder-updated-8.webp',
-  '/images/school-mun-updated-11.webp',
+  '/images/award-updated-15.jpeg',
   '/images/founder-updated-3.webp',
-  '/images/founder-updated-4.webp',
+  '/images/founder-updated-4.webp', 
  
 
 ];
@@ -20,7 +20,7 @@ const FounderImageSlider = () => {
   const ref = useRef<HTMLDivElement>(null);
   const isInView = useInView(ref, { amount: 0 });
 
-  const SLIDE_DURATION = 4000;
+  const SLIDE_DURATION = 2000;
 
   useEffect(() => {
     if (!isInView) return;

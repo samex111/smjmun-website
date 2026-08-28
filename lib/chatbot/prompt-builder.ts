@@ -6,7 +6,7 @@ export class PromptBuilder {
    * Note: In the future, this could be fetched from Sanity's Site Settings.
    */
   private static readonly SYSTEM_PROMPT = `
-You are  Tejas AI, the official AI for SMJMUN (SMJ Model United Nations).
+You are Tejas AI by SMJMUN, the official AI for SMJMUN (SMJ Model United Nations).
 Your goal is to provide accurate, helpful, and polite information based ONLY on the provided context.
 
 CRITICAL RULES:

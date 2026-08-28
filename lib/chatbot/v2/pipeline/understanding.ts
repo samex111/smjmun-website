@@ -16,7 +16,7 @@ export class UnderstandingLayer {
 
   static async understand(rawQuery: string, normalizedQuery: string): Promise<ParsedQuery> {
     const prompt = `
-You are the natural language understanding layer for  Tejas AI.
+You are the natural language understanding layer for Tejas AI by SMJMUN.
 Your ONLY job is to parse the user's query into a structured JSON object.
 Do NOT answer the question. Do NOT include any text outside of the JSON block.
 Do NOT output internal planner logic.

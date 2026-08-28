@@ -127,7 +127,7 @@ export class V2Engine {
     }
 
     if (context.query.intent === Intent.GREETING) {
-      text = "👋 Welcome to **SMJMUN**!\n\nI'm Tejas AI and I can help you with:\n* 🌍 What is Model United Nations?\n* 🏛 Learn about SMJMUN\n* 📅 Upcoming conferences\n* 📝 Registration & eligibility\n* 🏛 Committees & agendas\n* ❓ Frequently asked questions\n\nWhat would you like to explore?";
+      text = "👋 Welcome to **SMJMUN**!\n\nI'm Tejas AI by SMJMUN and I can help you with:\n* 🌍 What is Model United Nations?\n* 🏛 Learn about SMJMUN\n* 📅 Upcoming conferences\n* 📝 Registration & eligibility\n* 🏛 Committees & agendas\n* ❓ Frequently asked questions\n\nWhat would you like to explore?";
       customChips = [
         { label: "What is MUN?", action: "What is MUN?" },
         { label: "Upcoming Conferences", action: "Upcoming Conferences" },
@@ -137,7 +137,7 @@ export class V2Engine {
       responseType = "answer";
     } else if (context.query.intent === Intent.CONTACT) {
       const settings = await SiteSettingsService.getSiteSettings();
-      const email = settings?.contact?.email || "contact@smjmun.com";
+      const email = settings?.contact?.email || "info@smjmun.com";
       const phone = settings?.contact?.phone || "+91 93019 14668";
       const whatsapp = settings?.contact?.whatsapp || "+91 93019 14668";
       
@@ -209,7 +209,7 @@ User Question: ${query}`;
 ---
 
 Answer the user's question about SMJMUN (Shri Seth Mangilal Ji Sahu International Model United Nations, founded by Mr. Aarushh Sahu) or standard MUN procedures.
-If you do not know the answer, gently direct them to contact@smjmun.com.
+If you do not know the answer, gently direct them to info@smjmun.com.
 
 User Question: ${query}`;
       text = await LLMGenerator.generate(prompt, logger);

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import FounderHero from './components/FounderHero';
 import FounderIntroduction from './components/FounderIntroduction';
 import FounderImpact from './components/FounderImpact';
+import FounderMedia from './components/FounderMedia';
 import FounderJourney from './components/FounderJourney';
 import FounderPhilosophy from './components/FounderPhilosophy';
 import FounderVision from './components/FounderVision';
@@ -57,6 +58,7 @@ export default function FounderPage() {
         <FounderHero />
         <FounderIntroduction />
         <FounderImpact />
+        <FounderMedia />
         <FounderJourney />
         <FounderPhilosophy />
         <FounderVision />
