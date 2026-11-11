@@ -175,11 +175,19 @@ export default async function PaymentSuccessPage({
           </div>
 
           <Link
+            href={`/whatsapp/link?registrationId=${encodeURIComponent(registration.id)}`}
+            className="btn-primary"
+            style={{ display: "inline-block", marginTop: "32px", textDecoration: "none" }}
+          >
+            Connect WhatsApp Assistant
+          </Link>
+
+          <Link
             href="/conferences"
             className="btn-primary"
             style={{
               display: "inline-block",
-              marginTop: "32px",
+              marginTop: "16px",
               textDecoration: "none",
             }}
           >

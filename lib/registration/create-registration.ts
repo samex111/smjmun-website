@@ -23,6 +23,8 @@ export async function createRegistrationFromDraft(
       city: draft.city,
       committeePreference: draft.committeePreference,
       dietaryRequirements: draft.dietaryRequirements,
+      whatsappUpdatesConsent: draft.whatsappUpdatesConsent,
+      whatsappConsentAt: draft.whatsappUpdatesConsent ? new Date() : null,
       conferenceId: conference._id,
       conferenceTitle: conference.title,
       conferenceDate: conference.date ? new Date(conference.date) : null,

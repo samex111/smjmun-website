@@ -24,6 +24,7 @@ export const registrationSchema = z.object({
     .trim()
     .email("Please enter a valid email address")
     .max(255, "Email must be 255 characters or fewer"),
+  whatsappUpdatesConsent: z.boolean().optional().default(false),
   phone: z
     .string()
     .trim()
