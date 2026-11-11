@@ -123,7 +123,7 @@ async function searchPublicKnowledge(query: string) {
 
   // Fetch full published blog bodies only for the best matching articles.
   const results = await Promise.all(ranked.map(async (document) => {
-    if (document.type !== "blog" || !("slug" in document)) {
+    if (document.type !== "blog" || typeof document.slug !== "string") {
       return { type: document.type, title: document.title, content: document.text.slice(0, 6500), url: document.url };
     }
     const article = await BlogService.getBlogPostBySlug(document.slug);
