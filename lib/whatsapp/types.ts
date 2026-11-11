@@ -5,13 +5,31 @@ export type Actor = {
   verifiedRegistrationId?: string;
 };
 
-export function extractWhatsAppText(message: Record<string, any>): string {
-  if (message.type === "text") return message.text?.body || "";
-  if (message.type === "button") return message.button?.text || "";
-  if (message.type === "interactive") {
-    return message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || "";
+type WhatsAppRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): WhatsAppRecord | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as WhatsAppRecord
+    : undefined;
+}
+
+function nestedText(value: unknown, key: string): string | undefined {
+  const record = asRecord(value);
+  const text = record?.[key];
+  return typeof text === "string" ? text : undefined;
+}
+
+export function extractWhatsAppText(message: WhatsAppRecord): string {
+  const type = typeof message.type === "string" ? message.type : "";
+  if (type === "text") return nestedText(message.text, "body") || "";
+  if (type === "button") return nestedText(message.button, "text") || "";
+  if (type === "interactive") {
+    const interactive = asRecord(message.interactive);
+    return nestedText(interactive?.button_reply, "title")
+      || nestedText(interactive?.list_reply, "title")
+      || "";
   }
-  return message.type ? `[The delegate sent a ${message.type} message]` : "";
+  return type ? `[The delegate sent a ${type} message]` : "";
 }
 
 export function isResumeRequest(message: string): boolean {

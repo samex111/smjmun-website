@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { TejasAssistantService } from "@/lib/chatbot/tejas-assistant";
 import { sendWhatsAppText } from "@/lib/whatsapp/client";
@@ -14,8 +15,23 @@ export const maxDuration = 60;
 
 const webhookSchema = z.object({
   object: z.literal("whatsapp_business_account"),
-  entry: z.array(z.any()),
+  entry: z.array(z.unknown()),
 });
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordArray(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringField(value: JsonRecord, key: string): string {
+  const field = value[key];
+  return typeof field === "string" ? field : "";
+}
 
 function signatureIsValid(rawBody: string, signature: string | null) {
   const secret = process.env.META_APP_SECRET;
@@ -42,7 +58,7 @@ async function storeMessage(input: {
       direction: input.direction,
       role: input.role,
       content: input.content,
-      rawPayload: input.rawPayload as any,
+      rawPayload: input.rawPayload as Prisma.InputJsonValue | undefined,
     }],
     skipDuplicates: true,
   });
@@ -108,9 +124,9 @@ async function completeWhatsAppLink(waId: string, conversationId: string, rawTok
   await sendAndStore(conversationId, waId, summary);
 }
 
-async function handleInboundMessage(message: any) {
-  const waId = String(message.from || "");
-  const messageId = String(message.id || "");
+async function handleInboundMessage(message: JsonRecord) {
+  const waId = stringField(message, "from");
+  const messageId = stringField(message, "id");
   const text = extractWhatsAppText(message);
   if (!waId || !messageId) return;
 
@@ -187,9 +203,9 @@ async function handleInboundMessage(message: any) {
   await sendAndStore(conversation.id, waId, response.text);
 }
 
-async function handleHumanEcho(echo: any) {
-  const waId = String(echo.to || "");
-  const messageId = String(echo.id || "");
+async function handleHumanEcho(echo: JsonRecord) {
+  const waId = stringField(echo, "to");
+  const messageId = stringField(echo, "id");
   if (!waId || !messageId) return;
 
   const conversation = await db.whatsAppConversation.upsert({
@@ -242,14 +258,16 @@ export async function POST(request: Request) {
   const parsed = webhookSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ received: true });
 
-  for (const entry of parsed.data.entry) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-      if (change.field === "smb_message_echoes") {
-        for (const echo of value.message_echoes || []) await handleHumanEcho(echo);
+  for (const entryValue of parsed.data.entry) {
+    if (!isRecord(entryValue)) continue;
+    for (const changeValue of recordArray(entryValue.changes)) {
+      const field = stringField(changeValue, "field");
+      const value = isRecord(changeValue.value) ? changeValue.value : {};
+      if (field === "smb_message_echoes") {
+        for (const echo of recordArray(value.message_echoes)) await handleHumanEcho(echo);
       }
-      if (change.field === "messages") {
-        for (const message of value.messages || []) await handleInboundMessage(message);
+      if (field === "messages") {
+        for (const message of recordArray(value.messages)) await handleInboundMessage(message);
       }
     }
   }

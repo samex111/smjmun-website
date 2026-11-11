@@ -3,6 +3,26 @@ import { ConferenceService } from "@/lib/sanity/conference/service";
 import { SiteSettingsService } from "@/lib/sanity/siteSettings/service";
 import { sendWhatsAppTemplate } from "@/lib/whatsapp/client";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function resourceSummary(resources: unknown): string {
+  if (!Array.isArray(resources)) return "";
+  return resources.slice(0, 2).map((resource) => {
+    if (!isRecord(resource)) return "Conference resource";
+    const title = readString(resource.title) || readString(resource.name) || "Conference resource";
+    const file = isRecord(resource.file) ? resource.file : undefined;
+    const asset = isRecord(file?.asset) ? file.asset : undefined;
+    const url = readString(resource.url) || readString(resource.href) || readString(asset?.url);
+    return url ? `${title}: ${url}` : title;
+  }).join(" · ");
+}
+
 export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: string) {
   const registration = await db.registration.findUnique({ where: { id: registrationId } });
   if (!registration || registration.status !== "PAID" || !registration.whatsappUpdatesConsent) return;
@@ -26,13 +46,7 @@ export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: s
   const siteSettings = await SiteSettingsService.getSiteSettings();
   const contactEmail = conference?.contact?.email || siteSettings?.contact?.email || "See the official SMJMUN contact page";
   const contactPhone = conference?.contact?.phone || siteSettings?.contact?.phone;
-  const resources = Array.isArray(conference?.resources)
-    ? conference.resources.slice(0, 2).map((resource: any) => {
-        const title = resource.title || resource.name || "Conference resource";
-        const url = resource.url || resource.href || resource.file?.asset?.url;
-        return url ? `${title}: ${url}` : title;
-      }).join(" · ")
-    : "";
+  const resources = resourceSummary(conference?.resources);
   const detail = [
     "SMJMUN — payment confirmed",
     `Delegate: ${registration.firstName} ${registration.lastName}`,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type FunctionDeclaration } from "@google/genai";
 import { Groq } from "groq-sdk";
 import OpenAI from "openai";
 import { SiteSettingsService } from "@/lib/sanity/siteSettings/service";
@@ -26,12 +26,19 @@ const escalationSchema = z.object({
   urgency: z.enum(["normal", "high", "critical"]).default("normal"),
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function portableTextToString(value: unknown): string {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
-  return value.map((block: any) => {
-    const children = Array.isArray(block?.children) ? block.children : [];
-    return children.map((child: any) => typeof child?.text === "string" ? child.text : "").join("");
+  return value.map((block) => {
+    const children = isRecord(block) && Array.isArray(block.children) ? block.children : [];
+    return children.map((child) => {
+      if (!isRecord(child)) return "";
+      return typeof child.text === "string" ? child.text : "";
+    }).join("");
   }).filter(Boolean).join("\n");
 }
 
@@ -279,6 +286,37 @@ const toolDefinitions = [
   },
 ] as const;
 
+type AgentMessage = Record<string, unknown>;
+type GeminiFunctionCall = {
+  name?: string;
+  id?: string;
+  args?: Record<string, unknown>;
+};
+type GeminiPart = {
+  functionCall?: GeminiFunctionCall;
+  text?: string;
+};
+type GeminiTurn = { provider: "gemini"; parts: GeminiPart[]; text: string };
+type CompatibleToolCall = {
+  id: string;
+  function: { name: string; arguments: string };
+};
+type CompatibleAssistantMessage = {
+  content?: string | null;
+  tool_calls?: CompatibleToolCall[];
+};
+type CompatibleTurn = {
+  provider: "groq" | "nvidia";
+  message?: CompatibleAssistantMessage;
+};
+type AgentTurn = GeminiTurn | CompatibleTurn;
+
+const geminiFunctionDeclarations: FunctionDeclaration[] = toolDefinitions.map((tool) => ({
+  name: tool.function.name,
+  description: tool.function.description,
+  parametersJsonSchema: tool.function.parameters,
+}));
+
 const systemPrompt = (actor: Actor) => `${CONVERSATION_STYLE_GUIDE}
 
 You are Tejas AI, one tool-calling assistant used by the SMJMUN website and WhatsApp.
@@ -291,77 +329,87 @@ Only say a human was notified and will reply in this same WhatsApp chat when the
 For anonymous website visitors who need a human, provide the published contact/WhatsApp details instead of claiming a live website-chat takeover.
 Channel: ${actor.channel}. WhatsApp identity verified: ${Boolean(actor.verifiedRegistrationId)}.`;
 
-async function callGemini(messages: any[]) {
+async function callGemini(messages: AgentMessage[]): Promise<GeminiTurn> {
   const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-  const system = messages.find((message) => message.role === "system")?.content || "";
-  const contents = messages.filter((message) => message.role !== "system").map((message) => {
-    if (message.parts) return { role: message.role, parts: message.parts };
-    return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
-  });
+  const system = messages.find((message) => message.role === "system")?.content;
+  const contents = messages.filter((message) => message.role !== "system");
   const response = await client.models.generateContent({
     model: process.env.TEJAS_GEMINI_MODEL || "gemini-2.5-flash",
-    contents,
+    contents: contents as Parameters<typeof client.models.generateContent>[0]["contents"],
     config: {
-      systemInstruction: system,
-      tools: [{ functionDeclarations: toolDefinitions.map((tool) => ({
-        name: tool.function.name,
-        description: tool.function.description,
-        parameters: tool.function.parameters as any,
-      })) } as any],
+      systemInstruction: typeof system === "string" ? system : undefined,
+      tools: [{ functionDeclarations: geminiFunctionDeclarations }],
       temperature: 0.25,
     },
   });
-  return { provider: "gemini" as const, parts: response.candidates?.[0]?.content?.parts || [], text: response.text || "" };
+  const parts = (response.candidates?.[0]?.content?.parts || []) as GeminiPart[];
+  return { provider: "gemini", parts, text: response.text || "" };
 }
 
-async function callOpenAICompatible(messages: any[], provider: "groq" | "nvidia") {
-  const completion = provider === "groq"
-    ? await new Groq({ apiKey: process.env.GROQ_API_KEY! }).chat.completions.create({
-        model: process.env.TEJAS_GROQ_MODEL || "llama-3.3-70b-versatile",
-        messages,
-        tools: toolDefinitions as any,
-        tool_choice: "auto",
-        temperature: 0.25,
-      })
-    : await new OpenAI({
-        apiKey: process.env.NVIDIA_API_KEY!,
-        baseURL: "https://integrate.api.nvidia.com/v1",
-      }).chat.completions.create({
-        model: process.env.TEJAS_NVIDIA_MODEL || "openai/gpt-oss-20b",
-        messages,
-        tools: toolDefinitions as any,
-        tool_choice: "auto",
-        temperature: 0.25,
-        max_tokens: 1400,
-      });
-  return { provider, message: completion.choices[0]?.message };
+async function callOpenAICompatible(
+  messages: AgentMessage[],
+  provider: "groq" | "nvidia",
+): Promise<CompatibleTurn> {
+  if (provider === "groq") {
+    const client = new Groq({ apiKey: process.env.GROQ_API_KEY! });
+    const completion = await client.chat.completions.create({
+      model: process.env.TEJAS_GROQ_MODEL || "llama-3.3-70b-versatile",
+      messages: messages as Parameters<typeof client.chat.completions.create>[0]["messages"],
+      tools: toolDefinitions as unknown as NonNullable<Parameters<typeof client.chat.completions.create>[0]["tools"]>,
+      tool_choice: "auto",
+      temperature: 0.25,
+    });
+    return {
+      provider: "groq",
+      message: completion.choices[0]?.message as CompatibleAssistantMessage | undefined,
+    };
+  }
+
+  const client = new OpenAI({
+    apiKey: process.env.NVIDIA_API_KEY!,
+    baseURL: "https://integrate.api.nvidia.com/v1",
+  });
+  const completion = await client.chat.completions.create({
+    model: process.env.TEJAS_NVIDIA_MODEL || "openai/gpt-oss-20b",
+    messages: messages as Parameters<typeof client.chat.completions.create>[0]["messages"],
+    tools: toolDefinitions as unknown as NonNullable<Parameters<typeof client.chat.completions.create>[0]["tools"]>,
+    tool_choice: "auto",
+    temperature: 0.25,
+    max_tokens: 1400,
+  });
+  return {
+    provider: "nvidia",
+    message: completion.choices[0]?.message as CompatibleAssistantMessage | undefined,
+  };
 }
 
 export class TejasAssistantService {
   static async reply(input: { message: string; actor: Actor; history?: ChatMessage[] }) {
-    const messages: any[] = [
+    const messages: AgentMessage[] = [
       { role: "system", content: systemPrompt(input.actor) },
-      ...(input.history || []).slice(-12),
+      ...(input.history || []).slice(-12).map((item) => ({ role: item.role, content: item.content })),
       { role: "user", content: input.message },
     ];
 
     for (let turn = 0; turn < 4; turn += 1) {
-      let response: any;
+      let response: AgentTurn;
       if (process.env.GEMINI_API_KEY) response = await callGemini(messages);
       else if (process.env.GROQ_API_KEY) response = await callOpenAICompatible(messages, "groq");
       else if (process.env.NVIDIA_API_KEY) response = await callOpenAICompatible(messages, "nvidia");
       else throw new Error("Configure GEMINI_API_KEY, GROQ_API_KEY or NVIDIA_API_KEY for Tejas AI.");
 
       if (response.provider === "gemini") {
-        const calls = response.parts.filter((part: any) => part.functionCall);
+        const calls = response.parts.filter((part) => part.functionCall);
         if (!calls.length) {
-          const answer = response.text || response.parts.map((part: any) => part.text || "").join("");
+          const answer = response.text || response.parts.map((part) => part.text || "").join("");
           return { text: answer || "I couldn't prepare a response just now." };
         }
+
         messages.push({ role: "model", parts: response.parts });
-        const functionResponses = [];
+        const functionResponses: Array<Record<string, unknown>> = [];
         for (const part of calls) {
           const call = part.functionCall;
+          if (!call?.name) continue;
           let result: ToolResult;
           try { result = await runTool(call.name, call.args || {}, input.actor); }
           catch (error) { result = { ok: false, error: error instanceof Error ? error.message : "Tool execution failed." }; }
@@ -374,7 +422,7 @@ export class TejasAssistantService {
         const assistant = response.message;
         const calls = assistant?.tool_calls || [];
         if (!calls.length) return { text: assistant?.content || "I couldn't prepare a response just now." };
-        messages.push(assistant);
+        messages.push(assistant as unknown as AgentMessage);
         for (const call of calls) {
           let result: ToolResult;
           try { result = await runTool(call.function.name, JSON.parse(call.function.arguments || "{}"), input.actor); }
