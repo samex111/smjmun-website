@@ -23,24 +23,31 @@ function resourceSummary(resources: unknown): string {
   }).join(" · ");
 }
 
-export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: string) {
+export type WhatsAppPaymentConfirmationResult = {
+  status: "sent" | "failed" | "skipped";
+  attempted: number;
+  delivered: number;
+  reason?: "not_eligible" | "no_verified_number" | "template_not_configured" | "already_sent" | "delivery_failed";
+};
+
+export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: string): Promise<WhatsAppPaymentConfirmationResult> {
   const registration = await db.registration.findUnique({ where: { id: registrationId } });
-  if (!registration || registration.status !== "PAID" || !registration.whatsappUpdatesConsent) return;
+  if (!registration || registration.status !== "PAID" || !registration.whatsappUpdatesConsent) return { status: "skipped", attempted: 0, delivered: 0, reason: "not_eligible" };
   const links = await db.whatsAppRegistrationLink.findMany({
     where: { registrationId, isVerified: true },
     select: { waId: true },
   });
-  if (!links.length) return;
+  if (!links.length) return { status: "skipped", attempted: 0, delivered: 0, reason: "no_verified_number" };
 
   const templateName = process.env.META_PAYMENT_CONFIRMATION_TEMPLATE;
   if (!templateName) {
     console.warn("[WhatsApp] Payment template is not configured; skipping confirmation.");
-    return;
+    return { status: "skipped", attempted: links.length, delivered: 0, reason: "template_not_configured" };
   }
   const existing = await db.whatsAppNotification.findUnique({
     where: { registrationId_type: { registrationId, type: "PAYMENT_CONFIRMATION" } },
   });
-  if (existing?.status === "SENT") return;
+  if (existing?.status === "SENT") return { status: "sent", attempted: links.length, delivered: links.length, reason: "already_sent" };
 
   const conference = await ConferenceService.getConferenceById(registration.conferenceId);
   const siteSettings = await SiteSettingsService.getSiteSettings();
@@ -79,19 +86,27 @@ export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: s
       process.env.META_PAYMENT_CONFIRMATION_LANGUAGE || "en",
       [detail],
     );
-    return sent.messages?.[0]?.id || null;
+    const messageId = sent.messages?.[0]?.id;
+    if (!messageId) throw new Error("WhatsApp did not return a message ID.");
+    return messageId;
   }));
-  const successful = results.filter((result) => result.status === "fulfilled");
-  const firstMessageId = successful.length
-    ? (successful[0] as PromiseFulfilledResult<string | null>).value
-    : null;
+  const successful = results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : []
+  );
+  const firstMessageId = successful[0] || null;
+  const delivered = successful.length;
+  const status = delivered === links.length ? "SENT" : "FAILED";
 
   await db.whatsAppNotification.update({
     where: { registrationId_type: { registrationId, type: "PAYMENT_CONFIRMATION" } },
     data: {
-      status: successful.length === links.length ? "SENT" : "FAILED",
+      status,
       messageId: firstMessageId,
-      error: successful.length === links.length ? null : "One or more WhatsApp recipients could not be notified.",
+      error: status === "SENT" ? null : "WhatsApp confirmation delivery failed.",
     },
   });
+
+  return status === "SENT"
+    ? { status: "sent", attempted: links.length, delivered }
+    : { status: "failed", attempted: links.length, delivered, reason: "delivery_failed" };
 }

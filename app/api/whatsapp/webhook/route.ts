@@ -96,6 +96,15 @@ async function completeWhatsAppLink(waId: string, conversationId: string, rawTok
       data: { usedAt: new Date() },
     });
     if (consumed.count !== 1) throw new Error("WhatsApp link token was already consumed.");
+    const replacedLinks = await tx.whatsAppRegistrationLink.deleteMany({
+      where: { registrationId: registration.id, waId: { not: waId } },
+    });
+    if (replacedLinks.count > 0) {
+      await tx.whatsAppNotification.updateMany({
+        where: { registrationId: registration.id, type: "PAYMENT_CONFIRMATION" },
+        data: { status: "PENDING", messageId: null, error: "WhatsApp destination changed; confirmation will be resent." },
+      });
+    }
     await tx.whatsAppIdentity.upsert({ where: { waId }, create: { waId }, update: {} });
     await tx.whatsAppRegistrationLink.upsert({
       where: { waId_registrationId: { waId, registrationId: registration.id } },
@@ -104,11 +113,23 @@ async function completeWhatsAppLink(waId: string, conversationId: string, rawTok
     });
   });
 
+  let paymentConfirmation: Awaited<ReturnType<typeof sendPaidRegistrationWhatsAppConfirmation>> | undefined;
   if (registration.status === "PAID") {
-    try { await sendPaidRegistrationWhatsAppConfirmation(registration.id); }
-    catch (error) { console.error("[WhatsApp] Failed to send delayed payment confirmation:", error); }
+    try {
+      paymentConfirmation = await sendPaidRegistrationWhatsAppConfirmation(registration.id);
+    } catch (error) {
+      console.error("[WhatsApp] Failed to send delayed payment confirmation:", error);
+      paymentConfirmation = { status: "failed", attempted: 1, delivered: 0, reason: "delivery_failed" };
+    }
   }
 
+  const paymentConfirmationMessage = paymentConfirmation?.status === "sent"
+    ? "Your WhatsApp payment confirmation was sent in this chat."
+    : paymentConfirmation?.reason === "template_not_configured"
+      ? "Your payment is recorded, but the Secretariat WhatsApp confirmation template is not configured yet."
+      : paymentConfirmation?.status === "failed"
+        ? "Your payment is recorded, but the WhatsApp confirmation could not be delivered. The Secretariat can help if you need it resent."
+        : "Your payment is recorded. You can ask Tejas for the latest registration details.";
   const summary = registration.status === "PAID"
     ? [
         "Your WhatsApp number is now linked to your SMJMUN registration.",
@@ -118,7 +139,8 @@ async function completeWhatsAppLink(waId: string, conversationId: string, rawTok
         `Payment: ${registration.currency} ${registration.conferenceFee} · ${registration.status}`,
         `Transaction reference: ${registration.paymentId || "Not yet available"}`,
         `Paid at: ${registration.paidAt?.toISOString() || "Not available"}`,
-        "Your payment confirmation has been sent in this chat. You can now ask Tejas about your registration and conference. For refunds or changes, ask for the Secretariat.",
+        paymentConfirmationMessage,
+        "You can now ask Tejas about your registration and conference. For refunds or changes, ask for the Secretariat.",
       ].join("\n")
     : "Your WhatsApp number is securely linked. You can now ask Tejas about SMJMUN and your registration. Payment details will be available once HDFC confirms the payment.";
   await sendAndStore(conversationId, waId, summary);

@@ -64,7 +64,7 @@ export function WhatsAppLinkForm({ registrationId }: Props) {
       <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-[#bb8b57]">Tejas AI · WhatsApp</p>
       <h1 className="mb-3 font-heading text-3xl text-[#042147]">Connect your WhatsApp</h1>
       <p className="mb-6 text-sm leading-6 text-[#042147]/70">
-        Link the number you use on WhatsApp to this registration. We verify your registration email first, then ask you to send a one-time link from WhatsApp itself.
+        Link the number you use on WhatsApp to this registration. We verify your registration email first, then ask you to send a one-time link from WhatsApp itself. Linking a new number replaces the previously linked number for this registration.
       </p>
 
       {message && <p role="status" className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{message}</p>}
