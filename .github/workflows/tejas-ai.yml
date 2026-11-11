@@ -1,0 +1,56 @@
+name: Tejas AI checks
+
+on:
+  push:
+    branches:
+      - feat/tejas-single-agent-whatsapp-handoff
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/smjmun_test?schema=public
+      NEXT_PUBLIC_SANITY_PROJECT_ID: abcd1234
+      NEXT_PUBLIC_SANITY_DATASET: production
+      NEXT_PUBLIC_SANITY_API_VERSION: "2026-01-01"
+      GEMINI_API_KEY: ci-placeholder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Lint changed assistant files
+        run: >
+          npx eslint
+          app/api/chat/route.ts
+          app/api/register/route.ts
+          app/components/RegistrationForm.tsx
+          app/api/whatsapp/webhook/route.ts
+          app/api/whatsapp/link/request/route.ts
+          app/api/whatsapp/link/verify/route.ts
+          app/api/whatsapp/reminders/route.ts
+          app/whatsapp/link/WhatsAppLinkForm.tsx
+          lib/chatbot/tejas-assistant.ts
+          lib/support/service.ts
+          lib/whatsapp
+          lib/security/rate-limit.ts
+          lib/payment/verify-payment.ts
+      - name: WhatsApp utility tests
+        run: npx --yes tsx --test tests/whatsapp-types.test.mjs
+      - name: Production build
+        run: npm run build

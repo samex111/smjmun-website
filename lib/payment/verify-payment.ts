@@ -14,6 +14,7 @@ import {
 import { logPaymentEvent } from "@/lib/payment/log-payment-event";
 import { ConferenceService } from "@/lib/sanity/conference/service";
 import { sendRegistrationEmail } from "@/lib/email/send-registration-email";
+import { sendPaidRegistrationWhatsAppConfirmation } from "@/lib/whatsapp/notifications";
 
 const PENDING_STATUSES = new Set(["PENDING", "PENDING_VBV"]);
 const FAILED_STATUSES = new Set([
@@ -138,7 +139,13 @@ export async function verifyPayment(
       });
     } catch (emailError) {
       console.error("[EMAIL ERROR] Failed to send registration email:", emailError);
-      // We do not rollback or throw, business operation succeeded.
+      // Email delivery is not part of the deterministic payment decision.
+    }
+
+    try {
+      await sendPaidRegistrationWhatsAppConfirmation(updated.id);
+    } catch (whatsAppError) {
+      console.error("[WHATSAPP ERROR] Payment is still PAID; confirmation will need retry:", whatsAppError);
     }
 
     return {

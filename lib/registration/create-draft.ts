@@ -10,6 +10,7 @@ export interface CreateDraftInput {
   city?: string;
   committeePreference?: string;
   dietaryRequirements?: string;
+  whatsappUpdatesConsent?: boolean;
   conferenceId: string;
 }
 
@@ -33,6 +34,7 @@ export async function createOrReplaceDraft(
       city: input.city,
       committeePreference: input.committeePreference,
       dietaryRequirements: input.dietaryRequirements,
+      whatsappUpdatesConsent: input.whatsappUpdatesConsent ?? false,
       conferenceId: input.conferenceId,
     },
   });

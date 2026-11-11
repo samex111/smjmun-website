@@ -10,10 +10,10 @@ import { getAllPrograms } from "@/data/programs";
 import { db } from "@/lib/db";
 import { CONVERSATION_STYLE_GUIDE } from "@/lib/chatbot/v2/prompts/system";
 import { createSupportCase } from "@/lib/support/service";
+import type { Actor } from "@/lib/whatsapp/types";
 
-type Channel = "website" | "whatsapp";
-type Actor = { channel: Channel; sessionId: string; phone?: string; verifiedRegistrationId?: string };
 type ToolResult = { ok: boolean; data?: unknown; error?: string };
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 const searchSchema = z.object({ query: z.string().trim().min(2).max(500) });
 const paymentSchema = z.object({ registrationId: z.string().trim().optional() });
@@ -25,17 +25,33 @@ const escalationSchema = z.object({
 });
 
 function portableTextToString(value: unknown): string {
-  if (!Array.isArray(value)) return typeof value === "string" ? value : "";
-  return value.map((block: any) => (block.children || []).map((child: any) => child.text || "").join(" ")).join("\n");
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((block: any) => {
+    const children = Array.isArray(block?.children) ? block.children : [];
+    return children.map((child: any) => typeof child?.text === "string" ? child.text : "").join("");
+  }).filter(Boolean).join("\n");
 }
 
 function flatten(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(flatten).join("\n");
-  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !["gallery", "heroImage", "image", "coverImage", "videoSrc", "imageSrc"].includes(key))
-    .map(([key, entry]) => `${key}: ${flatten(entry)}`).join("\n");
-  return value == null ? "" : String(value);
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(flatten).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !["gallery", "heroImage", "image", "coverImage", "videoSrc", "imageSrc", "testimonials", "stats"].includes(key))
+      .map(([key, entry]) => {
+        const text = flatten(entry);
+        return text ? `${key}: ${text}` : "";
+      }).filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function scoreDocument(queryTerms: string[], title: string, text: string) {
+  const titleLower = title.toLowerCase();
+  const bodyLower = `${title} ${text}`.toLowerCase();
+  return queryTerms.reduce((score, term) => score + (titleLower.includes(term) ? 4 : bodyLower.includes(term) ? 1 : 0), 0);
 }
 
 async function searchPublicKnowledge(query: string) {
@@ -45,181 +61,286 @@ async function searchPublicKnowledge(query: string) {
     BlogService.getBlogPosts(),
     FAQService.getFAQs(),
   ]);
-  const programs = getAllPrograms();
-  const corpus: Array<{ type: string; title: string; text: string; url?: string }> = [];
-  if (settings) corpus.push({
-    type: "organization", title: settings.organizationName || "SMJMUN",
-    text: flatten({ ...settings, whyJoinSMJMUN: portableTextToString(settings.whyJoinSMJMUN) }),
-  });
-  for (const program of programs) corpus.push({
-    type: "program", title: program.meta.title,
-    text: flatten({ meta: program.meta, intro: program.intro, sections: program.sections, timeline: program.timeline, benefits: program.benefits, faq: program.faq, cta: program.cta }),
-    url: `/programs/${program.slug}`,
-  });
-  for (const conference of conferences) corpus.push({
-    type: "conference", title: conference.title,
-    text: flatten({ ...conference, overview: portableTextToString(conference.overview), agenda: portableTextToString(conference.agenda), eligibilityRichText: portableTextToString(conference.eligibilityRichText) }),
-    url: `/conferences/${conference.slug?.current || ""}`,
-  });
-  for (const blog of blogs) corpus.push({
-    type: "blog", title: blog.title,
-    text: [blog.excerpt, ...(blog.tags || [])].filter(Boolean).join("\n"),
-    url: `/blogs/${blog.slug.current}`,
-  });
-  for (const faq of faqs) corpus.push({
-    type: "faq", title: faq.question,
-    text: portableTextToString(faq.answer),
-  });
+  const documents: Array<{ type: string; title: string; text: string; url?: string }> = [];
 
-  const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter(term => term.length > 2);
-  const scored = corpus.map(item => {
-    const haystack = `${item.title} ${item.text}`.toLowerCase();
-    const score = terms.reduce((sum, term) => sum + (haystack.includes(term) ? (item.title.toLowerCase().includes(term) ? 3 : 1) : 0), 0);
-    return { ...item, score };
-  }).filter(item => item.score > 0).sort((a,b) => b.score-a.score).slice(0, 8);
-  return scored.map(({type,title,text,url}) => ({type,title,text:text.slice(0,7000),url}));
+  if (settings) {
+    documents.push({
+      type: "organization",
+      title: settings.organizationName || settings.fullName || "SMJMUN",
+      text: flatten({
+        ...settings,
+        whyJoinSMJMUN: portableTextToString(settings.whyJoinSMJMUN),
+      }),
+    });
+  }
+
+  for (const program of getAllPrograms()) {
+    documents.push({
+      type: "program",
+      title: program.meta.title,
+      text: flatten({
+        meta: program.meta, hero: program.hero, intro: program.intro,
+        sections: program.sections, timeline: program.timeline, benefits: program.benefits,
+        faq: program.faq, cta: program.cta,
+      }),
+      url: `/programs/${program.slug}`,
+    });
+  }
+
+  for (const conference of conferences) {
+    documents.push({
+      type: "conference",
+      title: conference.title,
+      text: flatten({
+        ...conference,
+        overview: portableTextToString(conference.overview),
+        agenda: portableTextToString(conference.agenda),
+        eligibilityRichText: portableTextToString(conference.eligibilityRichText),
+      }),
+      url: `/conferences/${conference.slug?.current || ""}`,
+    });
+  }
+
+  for (const faq of faqs) {
+    documents.push({ type: "faq", title: faq.question, text: portableTextToString(faq.answer) });
+  }
+
+  const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 2);
+  const blogCandidates = blogs.map((blog) => ({
+    type: "blog",
+    title: blog.title,
+    text: [blog.excerpt, ...(blog.tags || [])].filter(Boolean).join("\n"),
+    slug: blog.slug.current,
+    url: `/blogs/${blog.slug.current}`,
+  }));
+
+  const ranked = [
+    ...documents.map((document) => ({ ...document, score: scoreDocument(terms, document.title, document.text) })),
+    ...blogCandidates.map((document) => ({ ...document, score: scoreDocument(terms, document.title, document.text) })),
+  ].filter((document) => document.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
+
+  // Fetch full published blog bodies only for the best matching articles.
+  const results = await Promise.all(ranked.map(async (document) => {
+    if (document.type !== "blog" || !("slug" in document)) {
+      return { type: document.type, title: document.title, content: document.text.slice(0, 6500), url: document.url };
+    }
+    const article = await BlogService.getBlogPostBySlug(document.slug);
+    return {
+      type: "blog",
+      title: document.title,
+      content: [article?.excerpt, portableTextToString(article?.body), ...(article?.tags || [])].filter(Boolean).join("\n").slice(0, 6500),
+      url: document.url,
+    };
+  }));
+  return results;
 }
 
-async function getPaymentDetails(actor: Actor, registrationId?: string) {
-  if (!actor.verifiedRegistrationId && !actor.phone) {
-    return { ok:false, error:"The delegate must verify their identity before private registration or payment information can be shared." };
+async function getPaymentDetails(actor: Actor, registrationId?: string): Promise<ToolResult> {
+  if (actor.channel !== "whatsapp" || !actor.phone) {
+    return { ok: false, error: "Private registration information is available only after securely linking the delegate's WhatsApp number to a registration." };
   }
-  const registration = registrationId
-    ? await db.registration.findUnique({ where:{ id:registrationId } })
-    : await db.registration.findUnique({ where:{ id:actor.verifiedRegistrationId! } });
-  if (!registration) return {ok:false,error:"No matching registration was found."};
-  if (!actor.verifiedRegistrationId || registration.id !== actor.verifiedRegistrationId) {
-    return {ok:false,error:"This registration is not linked to the verified conversation. Ask the delegate to link and verify this registration."};
+  const links = await db.whatsAppRegistrationLink.findMany({
+    where: {
+      waId: actor.phone,
+      isVerified: true,
+      ...(registrationId ? { registrationId } : {}),
+    },
+    select: { registrationId: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!links.length) {
+    return { ok: false, error: "No verified registration is linked to this WhatsApp number. Ask the delegate to complete the email-verified WhatsApp linking flow." };
   }
-  return {ok:true,data:{
-    registrationId:registration.id,
-    name:`${registration.firstName} ${registration.lastName}`,
-    email:registration.email,
-    conference:registration.conferenceTitle,
-    conferenceDate:registration.conferenceDate,
-    status:registration.status,
-    paymentStatus:registration.status === "PAID" ? "PAID" : registration.status,
-    amount:registration.conferenceFee,
-    currency:registration.currency,
-    transactionId:registration.paymentId,
-    paidAt:registration.paidAt,
-    hdfcOrderId:registration.hdfcOrderId,
-  }};
+  const registrations = await db.registration.findMany({
+    where: { id: { in: links.map((link) => link.registrationId) } },
+    orderBy: { createdAt: "desc" },
+  });
+  return {
+    ok: true,
+    data: {
+      registrations: registrations.map((registration) => ({
+        registrationId: registration.id,
+        name: `${registration.firstName} ${registration.lastName}`,
+        email: registration.email,
+        conference: registration.conferenceTitle,
+        conferenceDate: registration.conferenceDate,
+        registrationStatus: registration.status,
+        paymentStatus: registration.status === "PAID" ? "PAID" : registration.status,
+        amount: registration.conferenceFee,
+        currency: registration.currency,
+        transactionId: registration.paymentId,
+        paidAt: registration.paidAt,
+        hdfcOrderId: registration.hdfcOrderId,
+      })),
+    },
+  };
 }
 
 async function runTool(name: string, rawArgs: unknown, actor: Actor): Promise<ToolResult> {
   if (name === "search_smjmun_knowledge") {
     const args = searchSchema.parse(rawArgs);
-    return {ok:true,data:await searchPublicKnowledge(args.query)};
+    const results = await searchPublicKnowledge(args.query);
+    return { ok: true, data: results };
   }
   if (name === "get_payment_details") {
     const args = paymentSchema.parse(rawArgs);
-    return getPaymentDetails(actor,args.registrationId);
+    return getPaymentDetails(actor, args.registrationId);
   }
   if (name === "escalate_to_human") {
     const args = escalationSchema.parse(rawArgs);
-    const created = await createSupportCase({
+    const result = await createSupportCase({
       actor,
-      reason:args.reason,
-      requestedAction:args.requestedAction,
-      summary:args.summary,
-      urgency:args.urgency,
+      reason: args.reason,
+      requestedAction: args.requestedAction,
+      summary: args.summary,
+      urgency: args.urgency,
     });
-    return {ok:true,data:created};
+    return { ok: true, data: result };
   }
-  return {ok:false,error:"Unknown tool"};
-}
-
-async function callModel(messages: Array<{role:"system"|"user"|"assistant";content:string}>, tools:any[]): Promise<any> {
-  if (process.env.GEMINI_API_KEY) {
-    const client = new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
-    const response = await client.models.generateContent({
-      model:"gemini-2.5-flash",
-      contents:messages.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]})),
-      config:{tools:[{functionDeclarations:tools.map(tool=>({
-        name:tool.function.name,
-        description:tool.function.description,
-        parameters:tool.function.parameters,
-      }))]},
-    });
-    return {provider:"gemini",parts:response.candidates?.[0]?.content?.parts || [],text:response.text || ""};
-  }
-  if (process.env.GROQ_API_KEY) {
-    const client = new Groq({apiKey:process.env.GROQ_API_KEY});
-    const response = await client.chat.completions.create({
-      model:"llama-3.3-70b-versatile",
-      messages:messages as any,
-      tools,
-      tool_choice:"auto",
-      temperature:0.2,
-    });
-    return {provider:"groq",message:response.choices[0]?.message};
-  }
-  if (process.env.NVIDIA_API_KEY) {
-    const client = new OpenAI({apiKey:process.env.NVIDIA_API_KEY,baseURL:"https://integrate.api.nvidia.com/v1"});
-    const response = await client.chat.completions.create({
-      model:"openai/gpt-oss-20b",
-      messages:messages as any,
-      tools,
-      tool_choice:"auto",
-      temperature:0.2,
-    });
-    return {provider:"openai",message:response.choices[0]?.message};
-  }
-  throw new Error("Configure GEMINI_API_KEY, GROQ_API_KEY, or NVIDIA_API_KEY.");
+  return { ok: false, error: "Unknown tool." };
 }
 
 const toolDefinitions = [
-  {type:"function",function:{name:"search_smjmun_knowledge",description:"Search authoritative public SMJMUN information: organization, founder, mission, published public policies/FAQs, programs, conferences, schedules, venue, logistics and published blog learning resources. Always use this before answering factual questions about SMJMUN.",parameters:{type:"object",properties:{query:{type:"string"}},required:["query"]}}},
-  {type:"function",function:{name:"get_payment_details",description:"Retrieve the verified delegate's own registration and payment details. Never use for payment verification or refunds. The application checks identity and returns only the linked registration.",parameters:{type:"object",properties:{registrationId:{type:"string"}},additionalProperties:false}}},
-  {type:"function",function:{name:"escalate_to_human",description:"Create a human support handoff when a delegate explicitly asks for a person, raises a refund/transfer/complaint/exception, or needs an action the assistant cannot perform. Include a concise factual summary and requested action. This does not approve or execute a refund.",parameters:{type:"object",properties:{reason:{type:"string"},requestedAction:{type:"string"},summary:{type:"string"},urgency:{type:"string",enum:["normal","high","critical"]}},required:["reason","requestedAction","summary"]}}},
+  {
+    type: "function",
+    function: {
+      name: "search_smjmun_knowledge",
+      description: "Search current, public SMJMUN organization details, founder, mission, vision, programs, public conference information, published FAQs, policies and educational blogs. Use this for factual questions before answering.",
+      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_payment_details",
+      description: "Read all registrations and payment details linked to the verified WhatsApp sender, or filter by one registration ID. This is read-only; it does not verify a pending HDFC payment or execute a refund.",
+      parameters: { type: "object", properties: { registrationId: { type: "string" } }, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "escalate_to_human",
+      description: "Hand a WhatsApp conversation to the SMJMUN Secretariat when a human is explicitly requested or a refund, transfer, complaint, payment dispute, exception or other staff-only action is needed. Do not approve or execute refunds.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: { type: "string" },
+          requestedAction: { type: "string" },
+          summary: { type: "string" },
+          urgency: { type: "string", enum: ["normal", "high", "critical"] },
+        },
+        required: ["reason", "requestedAction", "summary"],
+        additionalProperties: false,
+      },
+    },
+  },
 ] as const;
 
-export class TejasAssistantService {
-  static async reply(input:{message:string;actor:Actor;history?:Array<{role:"user"|"assistant";content:string}>}) {
-    const history=(input.history||[]).slice(-12);
-    const messages:any[]=[
-      {role:"system",content:`${CONVERSATION_STYLE_GUIDE}
+const systemPrompt = (actor: Actor) => `${CONVERSATION_STYLE_GUIDE}
 
-You are Tejas AI, a single tool-calling assistant for SMJMUN, serving both anonymous website visitors and WhatsApp delegates.
-Use the public knowledge tool before giving factual SMJMUN answers. Blogs are educational references, not policy authority. Never invent privacy, refund or cancellation policies.
-Use payment tool only for the user's verified linked registration. Never claim to verify, charge, refund, cancel or transfer a payment. HDFC verification is deterministic application code, not an AI action.
-For refunds, payment disputes, transfers, exceptions, complaints requiring judgement, or explicit human requests, call escalate_to_human. Do not ask the user to repeat known context. After successful escalation tell them the request is with the Secretariat, a human will reply in this same WhatsApp conversation, and avoid promising a fixed response time. If no operator is available, be transparent.
-Never disclose registration or payment information to an unverified user.
-Channel: ${input.actor.channel}. Identity verified: ${Boolean(input.actor.verifiedRegistrationId)}.`},
-      ...history.map(m=>({role:m.role,content:m.content})),
-      {role:"user",content:input.message},
+You are Tejas AI, one tool-calling assistant used by the SMJMUN website and WhatsApp.
+Use search_smjmun_knowledge before factual SMJMUN answers. Treat published blogs as learning resources, never as authoritative policy.
+Never invent a privacy, refund or cancellation policy. When authoritative policy content is not found, say the Secretariat must confirm it.
+Use get_payment_details only for a WhatsApp sender whose phone number is already email-OTP verified and linked to a registration. Never expose private payment information to an anonymous website visitor.
+HDFC payment verification is deterministic application code. This tool only reads recorded registration/payment facts. Never say a payment is confirmed unless the stored status is PAID. Never issue refunds, change registrations, transfer seats or modify payment state.
+For refund requests, payment disputes, transfers, exceptions, serious complaints or an explicit request for a human, call escalate_to_human. The Secretariat must approve and operate such actions.
+Only say a human was notified and will reply in this same WhatsApp chat when the escalation tool result has handoff=true and notificationStatus is sent or partial. If handoff=false, explain honestly that the case was recorded but a human notification could not be completed; keep Tejas active and use the public knowledge tool to give official contact details. Never promise an exact response time. AI must remain silent while human handoff is active, until the delegate asks to resume Tejas.
+For anonymous website visitors who need a human, provide the published contact/WhatsApp details instead of claiming a live website-chat takeover.
+Channel: ${actor.channel}. WhatsApp identity verified: ${Boolean(actor.verifiedRegistrationId)}.`;
+
+async function callGemini(messages: any[]) {
+  const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const system = messages.find((message) => message.role === "system")?.content || "";
+  const contents = messages.filter((message) => message.role !== "system").map((message) => {
+    if (message.parts) return { role: message.role, parts: message.parts };
+    return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
+  });
+  const response = await client.models.generateContent({
+    model: process.env.TEJAS_GEMINI_MODEL || "gemini-2.5-flash",
+    contents,
+    config: {
+      systemInstruction: system,
+      tools: [{ functionDeclarations: toolDefinitions.map((tool) => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters as any,
+      })) } as any],
+      temperature: 0.25,
+    },
+  });
+  return { provider: "gemini" as const, parts: response.candidates?.[0]?.content?.parts || [], text: response.text || "" };
+}
+
+async function callOpenAICompatible(messages: any[], provider: "groq" | "nvidia") {
+  const completion = provider === "groq"
+    ? await new Groq({ apiKey: process.env.GROQ_API_KEY! }).chat.completions.create({
+        model: process.env.TEJAS_GROQ_MODEL || "llama-3.3-70b-versatile",
+        messages,
+        tools: toolDefinitions as any,
+        tool_choice: "auto",
+        temperature: 0.25,
+      })
+    : await new OpenAI({
+        apiKey: process.env.NVIDIA_API_KEY!,
+        baseURL: "https://integrate.api.nvidia.com/v1",
+      }).chat.completions.create({
+        model: process.env.TEJAS_NVIDIA_MODEL || "openai/gpt-oss-20b",
+        messages,
+        tools: toolDefinitions as any,
+        tool_choice: "auto",
+        temperature: 0.25,
+        max_tokens: 1400,
+      });
+  return { provider, message: completion.choices[0]?.message };
+}
+
+export class TejasAssistantService {
+  static async reply(input: { message: string; actor: Actor; history?: ChatMessage[] }) {
+    const messages: any[] = [
+      { role: "system", content: systemPrompt(input.actor) },
+      ...(input.history || []).slice(-12),
+      { role: "user", content: input.message },
     ];
-    let finalText="";
-    for(let turn=0;turn<4;turn++){
-      const response=await callModel(messages,toolDefinitions as any);
-      if(response.provider==="gemini"){
-        const functionCalls=response.parts.filter((part:any)=>part.functionCall);
-        if(!functionCalls.length){finalText=response.text || response.parts.map((p:any)=>p.text||"").join("");break;}
-        const functionResponses=[];
-        for(const part of functionCalls){
-          const call=part.functionCall;
-          let result:ToolResult;
-          try { result=await runTool(call.name,call.args,input.actor); }
-          catch(error){result={ok:false,error:error instanceof Error?error.message:"Tool failed"};}
-          functionResponses.push({functionResponse:{name:call.name,response:result}});
+
+    for (let turn = 0; turn < 4; turn += 1) {
+      let response: any;
+      if (process.env.GEMINI_API_KEY) response = await callGemini(messages);
+      else if (process.env.GROQ_API_KEY) response = await callOpenAICompatible(messages, "groq");
+      else if (process.env.NVIDIA_API_KEY) response = await callOpenAICompatible(messages, "nvidia");
+      else throw new Error("Configure GEMINI_API_KEY, GROQ_API_KEY or NVIDIA_API_KEY for Tejas AI.");
+
+      if (response.provider === "gemini") {
+        const calls = response.parts.filter((part: any) => part.functionCall);
+        if (!calls.length) {
+          const answer = response.text || response.parts.map((part: any) => part.text || "").join("");
+          return { text: answer || "I couldn't prepare a response just now." };
         }
-        messages.push({role:"model",parts:response.parts});
-        messages.push({role:"user",parts:functionResponses});
+        messages.push({ role: "model", parts: response.parts });
+        const functionResponses = [];
+        for (const part of calls) {
+          const call = part.functionCall;
+          let result: ToolResult;
+          try { result = await runTool(call.name, call.args || {}, input.actor); }
+          catch (error) { result = { ok: false, error: error instanceof Error ? error.message : "Tool execution failed." }; }
+          functionResponses.push({
+            functionResponse: { name: call.name, id: call.id, response: result },
+          });
+        }
+        messages.push({ role: "user", parts: functionResponses });
       } else {
-        const assistantMessage=response.message;
-        const calls=assistantMessage?.tool_calls||[];
-        if(!calls.length){finalText=assistantMessage?.content||"";break;}
-        messages.push(assistantMessage);
-        for(const call of calls){
-          let result:ToolResult;
-          try { result=await runTool(call.function.name,JSON.parse(call.function.arguments||"{}"),input.actor); }
-          catch(error){result={ok:false,error:error instanceof Error?error.message:"Tool failed"};}
-          messages.push({role:"tool",tool_call_id:call.id,content:JSON.stringify(result)});
+        const assistant = response.message;
+        const calls = assistant?.tool_calls || [];
+        if (!calls.length) return { text: assistant?.content || "I couldn't prepare a response just now." };
+        messages.push(assistant);
+        for (const call of calls) {
+          let result: ToolResult;
+          try { result = await runTool(call.function.name, JSON.parse(call.function.arguments || "{}"), input.actor); }
+          catch (error) { result = { ok: false, error: error instanceof Error ? error.message : "Tool execution failed." }; }
+          messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
         }
       }
     }
-    if(!finalText) finalText="I’m having trouble completing that request right now. Please try again or ask for a Secretariat representative.";
-    return {text:finalText};
+    return { text: "I couldn't complete that request just now. Please try again or ask for the Secretariat." };
   }
 }

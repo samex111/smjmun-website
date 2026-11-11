@@ -1,61 +1,68 @@
 import { NextResponse } from "next/server";
-import { ChatbotService } from "@/lib/chatbot/service";
-import { QueryNormalizer } from "@/lib/chatbot/v2/pipeline/normalizer";
-import { SemanticMapper } from "@/lib/chatbot/v2/pipeline/semantic-mapper";
-import { FastMatcher } from "@/lib/chatbot/v2/pipeline/fast-matcher";
-import { UnderstandingLayer } from "@/lib/chatbot/v2/pipeline/understanding";
-import { V2Engine } from "@/lib/chatbot/v2/engine";
+import { z } from "zod";
+import { TejasAssistantService } from "@/lib/chatbot/tejas-assistant";
+import { rateLimit } from "@/lib/security/rate-limit";
+
+export const maxDuration = 60;
+
+const chatSchema = z.object({
+  question: z.string().trim().min(1).max(4000),
+  sessionId: z.string().trim().min(8).max(100).optional(),
+  history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(4000) })).max(12).optional(),
+});
+
+function sessionFromRequest(request: Request, provided?: string) {
+  const cookie = request.headers.get("cookie") || "";
+  const existing = cookie.match(/(?:^|;\s*)tejas_session=([^;]+)/)?.[1];
+  return existing || provided || `web-${crypto.randomUUID()}`;
+}
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { question, sessionId = "default-session", versionOverride } = body;
+    let body: unknown;
+    try { body = await request.json(); }
+    catch { return NextResponse.json({ success: false, error: "Invalid request body." }, { status: 400 }); }
 
-    if (!question || typeof question !== "string") {
+    const parsed = chatSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: "Please send a valid message." }, { status: 400 });
+    }
+
+    const forwardedFor = request.headers.get("x-forwarded-for");
+    const ip = forwardedFor?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "unknown";
+    const limited = await rateLimit(`website-chat:${ip}`);
+    if (!limited.success) {
       return NextResponse.json(
-        { success: false, error: "Missing or invalid 'question' in request body." },
-        { status: 400 }
+        { success: false, error: "You're sending messages too quickly. Please try again shortly." },
+        { status: 429, headers: { "Retry-After": String(limited.retryAfter || 60) } },
       );
     }
 
-    const version = versionOverride || process.env.CHATBOT_VERSION || "v2";
-    const provider = process.env.GEMINI_API_KEY ? "gemini" : (process.env.GROQ_API_KEY ? "groq" : "unknown");
+    const sessionId = sessionFromRequest(request, parsed.data.sessionId);
+    const answer = await TejasAssistantService.reply({
+      message: parsed.data.question,
+      actor: { channel: "website", sessionId },
+      history: parsed.data.history,
+    });
 
-    if (version === "v2") {
-      const response = await V2Engine.process(question, sessionId);
-      return NextResponse.json({
-        success: true,
-        answer: response.text, // Map V2 text to V1 answer so UI doesn't break
-        v2Response: response,  // Pass the full V2 object for future UI iterations
-        provider,
-        v2: true,
-        timestamp: new Date().toISOString()
-      }, { status: 200 });
-    }
-
-    // Call the deterministic pipeline we built in Phases 1-5 (V1)
-    const result = await ChatbotService.generateAnswer(question, sessionId);
-
-    // Structured response requested by the user
+    const response = NextResponse.json({
+      success: true,
+      answer: answer.text,
+      timestamp: new Date().toISOString(),
+    });
+    response.cookies.set("tejas_session", sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+    return response;
+  } catch (error) {
+    console.error("[POST /api/chat]", error);
     return NextResponse.json(
-      {
-        success: true,
-        answer: result.answer,
-        intent: result.intent,
-        provider: provider,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 200 }
-    );
-  } catch (error: any) {
-    console.error("Chat API Error:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error.message || "An unexpected error occurred processing your request.",
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
+      { success: false, error: "Tejas AI could not process that message. Please try again." },
+      { status: 500 },
     );
   }
 }

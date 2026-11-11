@@ -10,8 +10,6 @@ datasource db {
   provider = "postgresql"
 }
 
-// ─── Enums ─────────────────────────────────────────────────────────
-
 enum RegistrationStatus {
   PENDING_OTP
   PENDING_PAYMENT
@@ -27,7 +25,60 @@ enum InquiryStatus {
   CLOSED
 }
 
-// ─── Registration ──────────────────────────────────────────────────
+enum SubscriptionSource {
+  FOOTER
+  BLOG
+  CONTACT
+  HOMEPAGE
+  CONFERENCE
+  PARTNERSHIP
+  POPUP
+  OTHER
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  UNSUBSCRIBED
+}
+
+enum SupportChannel {
+  WEBSITE
+  WHATSAPP
+}
+
+enum SupportUrgency {
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum SupportStatus {
+  OPEN
+  NOTIFIED
+  RESOLVED
+}
+
+enum WhatsAppMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum WhatsAppMessageRole {
+  USER
+  AI
+  HUMAN
+  SYSTEM
+}
+
+enum WhatsAppNotificationType {
+  PAYMENT_CONFIRMATION
+}
+
+enum WhatsAppNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
 
 model Registration {
   id        String   @id @default(cuid())
@@ -51,17 +102,25 @@ model Registration {
   committeePreference  String?
   dietaryRequirements  String?
 
+  // Explicit WhatsApp transactional-notification consent
+  whatsappUpdatesConsent Boolean   @default(false)
+  whatsappConsentAt      DateTime?
+
   // Registration lifecycle
-  status      RegistrationStatus @default(PENDING_OTP)
+  status RegistrationStatus @default(PENDING_OTP)
 
   // Payment (HDFC / Juspay)
-  hdfcOrderId String?   @unique
+  hdfcOrderId String? @unique
   paymentId   String?
   paidAt      DateTime?
 
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  whatsappLinks         WhatsAppRegistrationLink[]
+  whatsappNotifications WhatsAppNotification[]
+  supportCases          SupportCase[]
 
   // One registration per email per conference
   @@unique([email, conferenceId])
@@ -72,13 +131,10 @@ model Registration {
   @@index([email])
 }
 
-// ─── Registration Draft ──────────────────────────────────────────────
-
 model RegistrationDraft {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  email     String
-
+  email       String
   firstName   String
   lastName    String
   phone       String
@@ -87,6 +143,7 @@ model RegistrationDraft {
   city                 String?
   committeePreference  String?
   dietaryRequirements  String?
+  whatsappUpdatesConsent Boolean @default(false)
 
   conferenceId String
 
@@ -95,55 +152,170 @@ model RegistrationDraft {
   @@index([email])
 }
 
-// ─── OTP Verification ──────────────────────────────────────────────
-
 model OtpVerification {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
   email     String
   otpHash   String
   expiresAt DateTime
-  verified  Boolean  @default(false)
-  attempts  Int      @default(0)
+  verified  Boolean @default(false)
+  attempts  Int     @default(0)
 
   createdAt DateTime @default(now())
 
   @@index([email])
 }
 
-// ─── Partnership Inquiry ───────────────────────────────────────────
+// Email OTP challenge used to link a registration to a WhatsApp number.
+model WhatsAppLinkChallenge {
+  id             String   @id @default(cuid())
+  registrationId String
+  email          String
+  otpHash        String
+  consentRequested Boolean @default(false)
+  expiresAt      DateTime
+  attempts       Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([registrationId, email])
+}
+
+// Only a hash of the short-lived LINK token is stored.
+model WhatsAppLinkToken {
+  tokenHash      String   @id
+  registrationId String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([registrationId])
+}
+
+model WhatsAppIdentity {
+  waId       String   @id
+  createdAt  DateTime @default(now())
+  registrations WhatsAppRegistrationLink[]
+}
+
+model WhatsAppRegistrationLink {
+  id             String   @id @default(cuid())
+  waId           String
+  registrationId String
+  isVerified     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  identity     WhatsAppIdentity @relation(fields: [waId], references: [waId], onDelete: Cascade)
+  registration Registration     @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([waId, registrationId])
+  @@index([registrationId])
+}
+
+model WhatsAppConversation {
+  id                 String   @id @default(cuid())
+  waId               String   @unique
+  activeHumanHandoff Boolean  @default(false)
+  lastMessageAt      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  messages     WhatsAppMessage[]
+  supportCases SupportCase[]
+}
+
+model WhatsAppMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  waMessageId    String   @unique
+  waId           String
+  direction      WhatsAppMessageDirection
+  role           WhatsAppMessageRole
+  content        String   @db.Text
+  rawPayload     Json?
+  createdAt      DateTime @default(now())
+
+  conversation WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model SupportCase {
+  id              String   @id @default(cuid())
+  channel         SupportChannel
+  sessionId       String?
+  waId            String?
+  registrationId  String?
+  requesterName   String?
+  requesterEmail  String?
+  requesterPhone  String?
+  reason          String
+  requestedAction String   @db.Text
+  summary         String   @db.Text
+  urgency         SupportUrgency @default(NORMAL)
+  status          SupportStatus  @default(OPEN)
+  humanRepliedAt  DateTime?
+  reminderSentAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  registration Registration?       @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  conversation WhatsAppConversation? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([waId, createdAt])
+}
+
+model WhatsAppNotification {
+  id             String   @id @default(cuid())
+  registrationId String
+  type           WhatsAppNotificationType
+  status         WhatsAppNotificationStatus @default(PENDING)
+  messageId      String?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([registrationId, type])
+  @@index([status, updatedAt])
+}
+
+// Persistent fixed-window counters shared by Vercel instances.
+model RateLimitCounter {
+  key        String
+  windowStart DateTime
+  count      Int      @default(0)
+  expiresAt  DateTime
+
+  @@id([key, windowStart])
+  @@index([expiresAt])
+}
 
 model PartnershipInquiry {
   id              String   @id @default(cuid())
-
   institutionName String
   contactPerson   String
   email           String
   phone           String?
   institutionType String?
   message         String?
-
-  status    InquiryStatus @default(NEW)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status          InquiryStatus @default(NEW)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([status])
   @@index([email])
 }
 
-// ─── Contact Inquiry ───────────────────────────────────────────────
-
 model ContactInquiry {
   id      String @id @default(cuid())
-
   name    String
   email   String
   phone   String?
   subject String?
   message String
-
-  status    InquiryStatus @default(NEW)
+  status  InquiryStatus @default(NEW)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -152,17 +324,14 @@ model ContactInquiry {
   @@index([email])
 }
 
-// ─── Volunteer Application ─────────────────────────────────────────
-
 model VolunteerApplication {
-  id          String @id @default(cuid())
-
-  name        String
-  email       String
-  phone       String
-  institution String
-  experience  String?
-  motivation  String?
+  id           String @id @default(cuid())
+  name         String
+  email        String
+  phone        String
+  institution  String
+  experience   String?
+  motivation   String?
   conferenceId String?
 
   createdAt DateTime @default(now())
@@ -170,51 +339,27 @@ model VolunteerApplication {
   @@index([email])
 }
 
-// ─── Executive Board Application ───────────────────────────────────
-
 model ExecutiveBoardApplication {
-  id                String @id @default(cuid())
-
-  name              String
-  email             String
-  phone             String
-  institution       String
-  experience        String
+  id                 String @id @default(cuid())
+  name               String
+  email              String
+  phone              String
+  institution        String
+  experience         String
   preferredCommittee String?
-  portfolio         String?
-  conferenceId      String?
+  portfolio          String?
+  conferenceId       String?
 
   createdAt DateTime @default(now())
 
   @@index([email])
 }
 
-// ─── Newsletter ────────────────────────────────────────────────────
-
-enum SubscriptionSource {
-  FOOTER
-  BLOG
-  CONTACT
-  HOMEPAGE
-  CONFERENCE
-  PARTNERSHIP
-  POPUP
-  OTHER
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  UNSUBSCRIBED
-}
-
 model NewsletterSubscriber {
   id        String   @id @default(cuid())
-
   email     String   @unique
-
   source    SubscriptionSource
   status    SubscriptionStatus @default(ACTIVE)
-
   ipAddress String?
   userAgent String?
 

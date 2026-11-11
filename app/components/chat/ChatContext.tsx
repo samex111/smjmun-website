@@ -65,7 +65,11 @@ export function ChatProvider({
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: content, sessionId }),
+        body: JSON.stringify({
+          question: content,
+          sessionId,
+          history: messages.slice(-12).map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+        }),
       });
 
       const data = await response.json();
@@ -87,7 +91,7 @@ export function ChatProvider({
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [messages, sessionId]);
 
   const value: ChatContextValue = {
     isOpen,

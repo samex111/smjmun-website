@@ -17,6 +17,7 @@ interface FormFields {
   lastName: string;
   email: string;
   phone: string;
+  whatsappUpdatesConsent: boolean;
   institution: string;
   city: string;
   committeePreference: string;
@@ -28,6 +29,7 @@ const INITIAL_FIELDS: FormFields = {
   lastName: "",
   email: "",
   phone: "",
+  whatsappUpdatesConsent: false,
   institution: "",
   city: "",
   committeePreference: "",
@@ -274,6 +276,19 @@ export default function RegistrationForm({ conference }: RegistrationFormProps) 
             />
             {fieldErrors.phone && <p className={errorClass}>{fieldErrors.phone}</p>}
           </div>
+
+          <label className="mb-6 flex items-start gap-3 text-[13px] leading-6 text-white/70">
+            <input
+              type="checkbox"
+              name="whatsappUpdatesConsent"
+              checked={fields.whatsappUpdatesConsent}
+              onChange={(event) => updateField("whatsappUpdatesConsent", event.target.checked)}
+              className="mt-1 h-4 w-4 accent-[#bb8b57]"
+            />
+            <span>
+              I agree to receive transactional registration, payment and conference updates from SMJMUN on WhatsApp. I can opt out at any time.
+            </span>
+          </label>
 
           <div className="mb-6 group">
             <label htmlFor="institution" className={labelClass}>

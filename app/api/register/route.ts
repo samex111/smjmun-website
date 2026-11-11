@@ -155,6 +155,7 @@ export async function POST(request: Request) {
       city: data.city,
       committeePreference: data.committeePreference,
       dietaryRequirements: data.dietaryRequirements,
+      whatsappUpdatesConsent: data.whatsappUpdatesConsent,
       conferenceId: conference._id,
     });
 
