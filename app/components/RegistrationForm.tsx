@@ -55,7 +55,7 @@ export default function RegistrationForm({ conference }: RegistrationFormProps) 
   const [registrationId, setRegistrationId] = useState<string | null>(null);
   const [verifiedMessage, setVerifiedMessage] = useState<string | null>(null);
 
-  function updateField(name: keyof FormFields, value: string | boolean) {
+  function updateField<K extends keyof FormFields>(name: K, value: FormFields[K]) {
     setFields((prev) => ({ ...prev, [name]: value }));
     setFieldErrors((prev) => ({ ...prev, [name]: undefined }));
     setFormError(null);
