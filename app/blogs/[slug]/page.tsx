@@ -13,6 +13,10 @@ import RelatedArticles from "./components/RelatedArticles";
 
 // ─── Static Params ──────────────────────────────────────────────────────────
 export async function generateStaticParams() {
+  // CI should verify the app build without relying on a live Sanity dataset.
+  // Production builds still pre-render every published CMS slug.
+  if (process.env.SKIP_SANITY_STATIC_PARAMS === "true") return [];
+
   const posts = await BlogService.getBlogPosts();
   return posts.map((p) => ({ slug: p.slug.current }));
 }

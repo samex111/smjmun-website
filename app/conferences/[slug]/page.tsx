@@ -20,6 +20,10 @@ import ConferenceSidebar from "./components/ConferenceSidebar";
 
 // ─── Static Params ─────────────────────────────────────────────────
 export async function generateStaticParams() {
+  // CI should verify the app build without relying on a live Sanity dataset.
+  // Production builds still pre-render every published CMS slug.
+  if (process.env.SKIP_SANITY_STATIC_PARAMS === "true") return [];
+
   const conferences = await ConferenceService.getConferences();
   return conferences.map((c) => ({ slug: c.slug.current }));
 }
