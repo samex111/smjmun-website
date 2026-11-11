@@ -39,15 +39,22 @@ export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: s
   });
   if (!links.length) return { status: "skipped", attempted: 0, delivered: 0, reason: "no_verified_number" };
 
-  const templateName = process.env.META_PAYMENT_CONFIRMATION_TEMPLATE;
-  if (!templateName) {
-    console.warn("[WhatsApp] Payment template is not configured; skipping confirmation.");
-    return { status: "skipped", attempted: links.length, delivered: 0, reason: "template_not_configured" };
-  }
   const existing = await db.whatsAppNotification.findUnique({
     where: { registrationId_type: { registrationId, type: "PAYMENT_CONFIRMATION" } },
   });
   if (existing?.status === "SENT") return { status: "sent", attempted: links.length, delivered: links.length, reason: "already_sent" };
+
+  await db.whatsAppNotification.upsert({
+    where: { registrationId_type: { registrationId, type: "PAYMENT_CONFIRMATION" } },
+    create: { registrationId, type: "PAYMENT_CONFIRMATION", status: "PENDING" },
+    update: { status: "PENDING", error: null },
+  });
+
+  const templateName = process.env.META_PAYMENT_CONFIRMATION_TEMPLATE;
+  if (!templateName) {
+    console.warn("[WhatsApp] Payment template is not configured; confirmation remains queued.");
+    return { status: "skipped", attempted: links.length, delivered: 0, reason: "template_not_configured" };
+  }
 
   const conference = await ConferenceService.getConferenceById(registration.conferenceId);
   const siteSettings = await SiteSettingsService.getSiteSettings();
@@ -72,12 +79,6 @@ export async function sendPaidRegistrationWhatsAppConfirmation(registrationId: s
     `Secretariat: ${contactEmail}${contactPhone ? ` · ${contactPhone}` : ""}`,
     "Reply here to ask Tejas about your registration or conference.",
   ].filter(Boolean).join("\n").slice(0, 950);
-
-  await db.whatsAppNotification.upsert({
-    where: { registrationId_type: { registrationId, type: "PAYMENT_CONFIRMATION" } },
-    create: { registrationId, type: "PAYMENT_CONFIRMATION", status: "PENDING" },
-    update: { status: "PENDING", error: null },
-  });
 
   const results = await Promise.allSettled(links.map(async ({ waId }) => {
     const sent = await sendWhatsAppTemplate(

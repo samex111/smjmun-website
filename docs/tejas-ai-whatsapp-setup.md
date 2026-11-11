@@ -43,7 +43,7 @@ The registration form now has a separate WhatsApp transactional-update opt-in. A
 
 After payment (or later from the link page), the delegate opens `/whatsapp/link?registrationId=...`, supplies their registration email and consents to WhatsApp messaging. The system sends an email OTP, then issues a short-lived token. The delegate opens the pre-filled WhatsApp link and sends `LINK_<token>` from the number they want to link. The webhook consumes the one-time token and associates that WhatsApp sender ID with the registration.
 
-The same linking page is available after payment on the success screen. If the number was linked before payment, the paid notification is queued from the HDFC-confirmed payment flow. If linked after payment, the webhook sends the already-paid confirmation after linking.
+The same linking page is available after payment on the success screen. Each registration has one verified WhatsApp number at a time; linking a new number replaces the previous link and revokes its access. If the number was linked before payment, the paid notification is queued from the HDFC-confirmed payment flow. If linked after payment, the webhook sends the already-paid confirmation after linking.
 
 ## Environment variables
 
