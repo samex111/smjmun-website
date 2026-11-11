@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     });
     await tx.registration.update({
       where: { id: registration.id },
-      data: { whatsappUpdatesConsent: true, whatsappConsentAt: new Date() },
+      data: { whatsappUpdatesConsent: true, whatsappConsentAt: new Date(), whatsappOptedOutAt: null },
     });
     await tx.whatsAppLinkChallenge.delete({ where: { id: challenge.id } });
   });

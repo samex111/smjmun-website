@@ -105,6 +105,7 @@ model Registration {
   // Explicit WhatsApp transactional-notification consent
   whatsappUpdatesConsent Boolean   @default(false)
   whatsappConsentAt      DateTime?
+  whatsappOptedOutAt      DateTime?
 
   // Registration lifecycle
   status RegistrationStatus @default(PENDING_OTP)

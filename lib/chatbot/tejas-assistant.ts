@@ -10,6 +10,8 @@ import { getAllPrograms } from "@/data/programs";
 import { db } from "@/lib/db";
 import { CONVERSATION_STYLE_GUIDE } from "@/lib/chatbot/v2/prompts/system";
 import { createSupportCase } from "@/lib/support/service";
+import { verifyPayment } from "@/lib/payment/verify-payment";
+import { PaymentError } from "@/lib/payment/errors";
 import type { Actor } from "@/lib/whatsapp/types";
 
 type ToolResult = { ok: boolean; data?: unknown; error?: string };
@@ -151,7 +153,39 @@ async function getPaymentDetails(actor: Actor, registrationId?: string): Promise
   if (!links.length) {
     return { ok: false, error: "No verified registration is linked to this WhatsApp number. Ask the delegate to complete the email-verified WhatsApp linking flow." };
   }
-  const registrations = await db.registration.findMany({
+  let registrations = await db.registration.findMany({
+    where: { id: { in: links.map((link) => link.registrationId) } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // The tool may refresh a pending order through the existing deterministic HDFC verifier.
+  // The model never calls HDFC and never changes payment status itself.
+  const verificationNotes = new Map<string, string>();
+  for (const registration of registrations) {
+    if (registration.status !== "PENDING_PAYMENT" || !registration.hdfcOrderId) continue;
+    try {
+      const verification = await verifyPayment(registration.id);
+      verificationNotes.set(
+        registration.id,
+        verification.outcome === "paid"
+          ? "HDFC verified this payment as CHARGED."
+          : verification.outcome === "pending"
+            ? `HDFC currently reports ${verification.hdfcStatus}; payment is not confirmed yet.`
+            : `HDFC reports ${verification.hdfcStatus}; payment is not confirmed as paid.`,
+      );
+    } catch (error) {
+      if (error instanceof PaymentError && error.code === "ALREADY_PAID") continue;
+      verificationNotes.set(
+        registration.id,
+        error instanceof PaymentError
+          ? `Live HDFC verification could not be completed (${error.code}). Do not describe this payment as confirmed.`
+          : "Live HDFC verification could not be completed. Do not describe this payment as confirmed.",
+      );
+      console.error("[Tejas payment tool] HDFC status refresh did not complete:", error);
+    }
+  }
+
+  registrations = await db.registration.findMany({
     where: { id: { in: links.map((link) => link.registrationId) } },
     orderBy: { createdAt: "desc" },
   });
@@ -171,6 +205,8 @@ async function getPaymentDetails(actor: Actor, registrationId?: string): Promise
         transactionId: registration.paymentId,
         paidAt: registration.paidAt,
         hdfcOrderId: registration.hdfcOrderId,
+        verificationNote: verificationNotes.get(registration.id)
+          || (registration.status === "PAID" ? "Stored PAID status was written only by the deterministic HDFC verification flow." : "This is the latest recorded registration status; no successful HDFC charge confirmation is recorded."),
       })),
     },
   };
@@ -213,7 +249,7 @@ const toolDefinitions = [
     type: "function",
     function: {
       name: "get_payment_details",
-      description: "Read all registrations and payment details linked to the verified WhatsApp sender, or filter by one registration ID. This is read-only; it does not verify a pending HDFC payment or execute a refund.",
+      description: "Get all registrations and payment details linked to the verified WhatsApp sender, optionally filtered by registration ID. For pending HDFC orders, the server calls the existing deterministic HDFC verification service before returning the fresh status. Never approve or execute a refund or registration change.",
       parameters: { type: "object", properties: { registrationId: { type: "string" } }, additionalProperties: false },
     },
   },

@@ -136,6 +136,21 @@ async function handleInboundMessage(message: any) {
     return;
   }
 
+  if (/^(stop|unsubscribe|cancel|opt[ -]?out)$/i.test(text.trim())) {
+    const links = await db.whatsAppRegistrationLink.findMany({
+      where: { waId, isVerified: true },
+      select: { registrationId: true },
+    });
+    if (links.length) {
+      await db.registration.updateMany({
+        where: { id: { in: links.map((link) => link.registrationId) } },
+        data: { whatsappUpdatesConsent: false, whatsappOptedOutAt: new Date() },
+      });
+    }
+    await sendAndStore(conversation.id, waId, "You have opted out of automatic SMJMUN WhatsApp updates. You can still message us when you need help. To opt in again, use the WhatsApp linking page on the SMJMUN website.");
+    return;
+  }
+
   const linkMatch = text.match(/^LINK[_ ]([A-Za-z0-9_-]{20,100})$/i);
   if (linkMatch) {
     await completeWhatsAppLink(waId, conversation.id, linkMatch[1]);

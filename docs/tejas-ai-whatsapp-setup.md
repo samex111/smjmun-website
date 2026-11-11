@@ -17,7 +17,7 @@ The WhatsApp conversation is stored in PostgreSQL. When escalation is needed:
 - The agent pauses the conversation only after WhatsApp accepts at least one staff notification.
 - The founder or operator opens the delegate's existing chat in the WhatsApp Business App and replies there.
 - With WhatsApp Business App Coexistence enabled, the `smb_message_echoes` webhook stores staff replies as `HUMAN` messages in the same conversation. Incoming delegate messages are also saved but do not trigger the AI while handoff is active.
-- The delegate can send `Tejas resume` to resume the assistant. The previous AI + human conversation stays in the transcript supplied to Tejas.
+- The delegate can send `Tejas resume` to resume the assistant. The previous AI + human conversation stays in the transcript supplied to Tejas. Sending `STOP` opts the linked registration(s) out of proactive WhatsApp updates; the delegate can opt in again by completing the website linking flow.
 
 This deliberately does **not** add a separate staff dashboard or a second AI agent.
 
