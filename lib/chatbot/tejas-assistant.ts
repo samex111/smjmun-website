@@ -56,6 +56,8 @@ function scoreDocument(queryTerms: string[], title: string, text: string) {
   return queryTerms.reduce((score, term) => score + (titleLower.includes(term) ? 4 : bodyLower.includes(term) ? 1 : 0), 0);
 }
 
+type PublicDocument = { type: string; title: string; text: string; url?: string; slug?: string };
+
 async function searchPublicKnowledge(query: string) {
   const [settings, conferences, blogs, faqs] = await Promise.all([
     SiteSettingsService.getSiteSettings(),
@@ -63,7 +65,7 @@ async function searchPublicKnowledge(query: string) {
     BlogService.getBlogPosts(),
     FAQService.getFAQs(),
   ]);
-  const documents: Array<{ type: string; title: string; text: string; url?: string }> = [];
+  const documents: PublicDocument[] = [];
 
   if (settings) {
     documents.push({
@@ -108,7 +110,7 @@ async function searchPublicKnowledge(query: string) {
   }
 
   const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 2);
-  const blogCandidates = blogs.map((blog) => ({
+  const blogCandidates: PublicDocument[] = blogs.map((blog) => ({
     type: "blog",
     title: blog.title,
     text: [blog.excerpt, ...(blog.tags || [])].filter(Boolean).join("\n"),
@@ -116,14 +118,18 @@ async function searchPublicKnowledge(query: string) {
     url: `/blogs/${blog.slug.current}`,
   }));
 
-  const ranked = [
-    ...documents.map((document) => ({ ...document, score: scoreDocument(terms, document.title, document.text) })),
-    ...blogCandidates.map((document) => ({ ...document, score: scoreDocument(terms, document.title, document.text) })),
-  ].filter((document) => document.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
+  const ranked = [...documents, ...blogCandidates]
+    .map((document) => ({
+      ...document,
+      score: scoreDocument(terms, document.title, document.text),
+    }))
+    .filter((document) => document.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
 
   // Fetch full published blog bodies only for the best matching articles.
   const results = await Promise.all(ranked.map(async (document) => {
-    if (document.type !== "blog" || typeof document.slug !== "string") {
+    if (document.type !== "blog" || !document.slug) {
       return { type: document.type, title: document.title, content: document.text.slice(0, 6500), url: document.url };
     }
     const article = await BlogService.getBlogPostBySlug(document.slug);

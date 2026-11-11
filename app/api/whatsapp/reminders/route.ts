@@ -15,10 +15,6 @@ export async function GET(request: Request) {
   const recipients = (process.env.META_SECRETARIAT_NUMBERS || "")
     .split(",").map((item) => item.trim().replace(/\D/g, "")).filter(Boolean);
   const templateName = process.env.META_SUPPORT_ALERT_TEMPLATE;
-  if (recipients.length < 2 || !templateName) {
-    return NextResponse.json({ sent: 0, skipped: true, reason: "Secretariat recipients or approved support template are not configured." });
-  }
-
   const cutoff = new Date(Date.now() - 5 * 60_000);
   const retryableNotifications = await db.whatsAppNotification.findMany({
     where: { status: { in: ["PENDING", "FAILED"] } },
@@ -31,6 +27,15 @@ export async function GET(request: Request) {
     } catch (error) {
       console.error("[WhatsApp reminder] Payment confirmation retry failed:", error);
     }
+  }
+
+  if (recipients.length < 2 || !templateName) {
+    return NextResponse.json({
+      scanned: 0,
+      remindersSent: 0,
+      paymentConfirmationRetries: retryableNotifications.length,
+      supportRemindersSkipped: "Secretariat recipients or support alert template are not configured.",
+    });
   }
 
   const cases = await db.supportCase.findMany({
